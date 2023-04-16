@@ -2,7 +2,7 @@ use {
     crate::{
         error::Error,
         io::messages_from_std_in,
-        node::{Context, Node},
+        node::{Node, NodeContext},
         protocol::{Init, InitOk},
     },
     futures::{stream::FuturesUnordered, stream::StreamExt},
@@ -12,24 +12,32 @@ use {
 pub struct Server;
 
 impl Server {
-    pub async fn serve(self, node: Node) -> Result<(), Error> {
-        let mut messages = messages_from_std_in();
+    pub async fn serve<State>(self, node: Node<State>) -> Result<(), Error>
+    where
+        State: Clone + 'static,
+    {
+        let (state, router) = node.into_parts();
 
-        let message = messages.next().await.expect("no messages received");
+        let mut incoming_messages = messages_from_std_in();
+
+        let message = incoming_messages
+            .next()
+            .await
+            .expect("no messages received");
 
         let init: Init =
             serde_json::from_value(message.body.clone()).expect("didn't receive an init message");
 
-        let context = Context::new(init.node_id, init.node_ids);
+        let context = NodeContext::new(init.node_id);
         context.reply(message, InitOk {}).await?;
 
         let mut futures = FuturesUnordered::new();
         loop {
             tokio::select! {
-                message = messages.next() => {
+                message = incoming_messages.next() => {
                     match message {
                         Some(message) => {
-                            if let Ok(future) = node.handle(&context, message) {
+                            if let Ok(future) = router.handle(&context, &state, message) {
                                 futures.push(future);
                             }
                         }
@@ -39,7 +47,7 @@ impl Server {
                 },
                 result = futures.next(), if ! futures.is_empty() => {
                     match result {
-                        Some(Ok(())) => {},
+                        Some(Ok(_)) => {},
                         Some(Err(error)) => {
                             eprintln!("error: {}", error);
                         }

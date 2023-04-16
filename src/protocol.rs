@@ -84,12 +84,6 @@ pub struct Init {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InitOk {}
 
-impl Into<MessageBody> for InitOk {
-    fn into(self) -> MessageBody {
-        MessageBody::InitOk(self)
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Echo {
     pub echo: Value,
@@ -100,12 +94,6 @@ pub struct EchoOk {
     pub echo: Value,
 }
 
-impl Into<MessageBody> for EchoOk {
-    fn into(self) -> MessageBody {
-        MessageBody::EchoOk(self)
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Generate {}
 
@@ -114,38 +102,20 @@ pub struct GenerateOk {
     pub id: Uuid,
 }
 
-impl Into<MessageBody> for GenerateOk {
-    fn into(self) -> MessageBody {
-        MessageBody::GenerateOk(self)
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Broadcast {
-    pub message: i32,
+    pub message: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BroadcastOk {}
-
-impl Into<MessageBody> for BroadcastOk {
-    fn into(self) -> MessageBody {
-        MessageBody::BroadcastOk(self)
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Read {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadOk {
-    pub messages: Vec<i32>,
-}
-
-impl Into<MessageBody> for ReadOk {
-    fn into(self) -> MessageBody {
-        MessageBody::ReadOk(self)
-    }
+    pub messages: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,12 +125,6 @@ pub struct Topology {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopologyOk {}
-
-impl Into<MessageBody> for TopologyOk {
-    fn into(self) -> MessageBody {
-        MessageBody::TopologyOk(self)
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -200,4 +164,76 @@ pub enum MessageBody {
 
     #[serde(rename = "topology_ok")]
     TopologyOk(TopologyOk),
+}
+
+impl From<Init> for MessageBody {
+    fn from(init: Init) -> Self {
+        Self::Init(init)
+    }
+}
+
+impl From<InitOk> for MessageBody {
+    fn from(init_ok: InitOk) -> Self {
+        Self::InitOk(init_ok)
+    }
+}
+
+impl From<Echo> for MessageBody {
+    fn from(echo: Echo) -> Self {
+        Self::Echo(echo)
+    }
+}
+
+impl From<EchoOk> for MessageBody {
+    fn from(echo_ok: EchoOk) -> Self {
+        Self::EchoOk(echo_ok)
+    }
+}
+
+impl From<Generate> for MessageBody {
+    fn from(generate: Generate) -> Self {
+        Self::Generate(generate)
+    }
+}
+
+impl From<GenerateOk> for MessageBody {
+    fn from(generate_ok: GenerateOk) -> Self {
+        Self::GenerateOk(generate_ok)
+    }
+}
+
+impl From<Broadcast> for MessageBody {
+    fn from(broadcast: Broadcast) -> Self {
+        Self::Broadcast(broadcast)
+    }
+}
+
+impl From<BroadcastOk> for MessageBody {
+    fn from(broadcast_ok: BroadcastOk) -> Self {
+        Self::BroadcastOk(broadcast_ok)
+    }
+}
+
+impl From<Read> for MessageBody {
+    fn from(read: Read) -> Self {
+        Self::Read(read)
+    }
+}
+
+impl From<ReadOk> for MessageBody {
+    fn from(read_ok: ReadOk) -> Self {
+        Self::ReadOk(read_ok)
+    }
+}
+
+impl From<Topology> for MessageBody {
+    fn from(topology: Topology) -> Self {
+        Self::Topology(topology)
+    }
+}
+
+impl From<TopologyOk> for MessageBody {
+    fn from(topology_ok: TopologyOk) -> Self {
+        Self::TopologyOk(topology_ok)
+    }
 }

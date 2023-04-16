@@ -3,6 +3,9 @@ pub enum Error {
     #[error("not implemented")]
     NotImplemented,
 
+    #[error("request cancelled")]
+    RequestCancelled,
+
     #[error(transparent)]
     IoError(#[from] std::io::Error),
 

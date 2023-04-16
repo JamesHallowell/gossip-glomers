@@ -1,20 +1,20 @@
 use {
     gossip_glomers::{
         error::Error,
-        node::{Context, Node},
+        node::{Node, NodeContext},
         protocol::{Generate, GenerateOk},
         server::Server,
     },
     uuid::Uuid,
 };
 
-async fn generate(_: Context, _: Generate) -> Result<GenerateOk, Error> {
+async fn generate(_: NodeContext, _: (), _: Generate) -> Result<GenerateOk, Error> {
     Ok(GenerateOk { id: Uuid::new_v4() })
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Error> {
-    let node = Node::default().add_route("generate", generate);
+    let node = Node::default().add_handler("generate", generate);
 
     Server::default().serve(node).await
 }
