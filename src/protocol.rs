@@ -2,7 +2,13 @@ use {
     crate::error::Error,
     serde::{Deserialize, Serialize},
     serde_json::Value,
-    std::collections::HashMap,
+    std::{
+        collections::HashMap,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc,
+        },
+    },
     tokio::io::{self, AsyncWriteExt},
     uuid::Uuid,
 };
@@ -21,13 +27,15 @@ impl NodeId {
 }
 
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct MessageId(i32);
+pub struct MessageId(u64);
 
-impl MessageId {
-    pub fn increment(&mut self) -> MessageId {
-        let MessageId(value) = self;
-        *value += 1;
-        *self
+#[derive(Debug, Default, Clone)]
+pub struct MessageIdGenerator(Arc<AtomicU64>);
+
+impl MessageIdGenerator {
+    pub fn next_id(&self) -> MessageId {
+        let MessageIdGenerator(value) = self;
+        MessageId(value.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -35,32 +43,26 @@ impl MessageId {
 pub struct Message {
     pub src: NodeId,
     pub dest: NodeId,
-    pub body: MessageBody,
+    pub body: Value,
 }
 
 impl Message {
+    pub fn msg_type(&self) -> Option<&str> {
+        self.body.get("type").and_then(Value::as_str)
+    }
+
     pub fn msg_id(&self) -> Option<MessageId> {
-        match self.body {
-            MessageBody::Init { msg_id, .. } => Some(msg_id),
-            MessageBody::Echo { msg_id, .. } => Some(msg_id),
-            MessageBody::Generate { msg_id } => Some(msg_id),
-            MessageBody::Broadcast { msg_id, .. } => msg_id,
-            MessageBody::Read { msg_id } => Some(msg_id),
-            MessageBody::Topology { msg_id, .. } => Some(msg_id),
-            _ => None,
-        }
+        self.body
+            .get("msg_id")
+            .and_then(Value::as_u64)
+            .map(MessageId)
     }
 
     pub fn in_reply_to(&self) -> Option<MessageId> {
-        match self.body {
-            MessageBody::InitOk { in_reply_to } => Some(in_reply_to),
-            MessageBody::EchoOk { in_reply_to, .. } => Some(in_reply_to),
-            MessageBody::GenerateOk { in_reply_to, .. } => Some(in_reply_to),
-            MessageBody::BroadcastOk { in_reply_to, .. } => Some(in_reply_to),
-            MessageBody::ReadOk { in_reply_to, .. } => Some(in_reply_to),
-            MessageBody::TopologyOk { in_reply_to, .. } => Some(in_reply_to),
-            _ => None,
-        }
+        self.body
+            .get("in_reply_to")
+            .and_then(Value::as_u64)
+            .map(MessageId)
     }
 
     pub async fn send(self) -> Result<(), Error> {
@@ -74,69 +76,128 @@ impl Message {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Init {
+    pub node_id: NodeId,
+    pub node_ids: Vec<NodeId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InitOk {}
+
+impl Into<MessageBody> for InitOk {
+    fn into(self) -> MessageBody {
+        MessageBody::InitOk(self)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Echo {
+    pub echo: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EchoOk {
+    pub echo: Value,
+}
+
+impl Into<MessageBody> for EchoOk {
+    fn into(self) -> MessageBody {
+        MessageBody::EchoOk(self)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Generate {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateOk {
+    pub id: Uuid,
+}
+
+impl Into<MessageBody> for GenerateOk {
+    fn into(self) -> MessageBody {
+        MessageBody::GenerateOk(self)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Broadcast {
+    pub message: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BroadcastOk {}
+
+impl Into<MessageBody> for BroadcastOk {
+    fn into(self) -> MessageBody {
+        MessageBody::BroadcastOk(self)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Read {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadOk {
+    pub messages: Vec<i32>,
+}
+
+impl Into<MessageBody> for ReadOk {
+    fn into(self) -> MessageBody {
+        MessageBody::ReadOk(self)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Topology {
+    pub topology: HashMap<NodeId, Vec<NodeId>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopologyOk {}
+
+impl Into<MessageBody> for TopologyOk {
+    fn into(self) -> MessageBody {
+        MessageBody::TopologyOk(self)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum MessageBody {
     #[serde(rename = "init")]
-    Init {
-        msg_id: MessageId,
-        node_id: NodeId,
-        node_ids: Vec<NodeId>,
-    },
+    Init(Init),
 
     #[serde(rename = "init_ok")]
-    InitOk { in_reply_to: MessageId },
+    InitOk(InitOk),
 
     #[serde(rename = "echo")]
-    Echo { echo: Value, msg_id: MessageId },
+    Echo(Echo),
 
     #[serde(rename = "echo_ok")]
-    EchoOk {
-        echo: Value,
-        msg_id: MessageId,
-        in_reply_to: MessageId,
-    },
+    EchoOk(EchoOk),
 
     #[serde(rename = "generate")]
-    Generate { msg_id: MessageId },
+    Generate(Generate),
 
     #[serde(rename = "generate_ok")]
-    GenerateOk {
-        id: Uuid,
-        msg_id: MessageId,
-        in_reply_to: MessageId,
-    },
+    GenerateOk(GenerateOk),
 
     #[serde(rename = "broadcast")]
-    Broadcast {
-        message: i32,
-        msg_id: Option<MessageId>,
-    },
+    Broadcast(Broadcast),
 
     #[serde(rename = "broadcast_ok")]
-    BroadcastOk {
-        msg_id: MessageId,
-        in_reply_to: MessageId,
-    },
+    BroadcastOk(BroadcastOk),
 
     #[serde(rename = "read")]
-    Read { msg_id: MessageId },
+    Read(Read),
 
     #[serde(rename = "read_ok")]
-    ReadOk {
-        messages: Vec<i32>,
-        msg_id: MessageId,
-        in_reply_to: MessageId,
-    },
+    ReadOk(ReadOk),
 
     #[serde(rename = "topology")]
-    Topology {
-        topology: HashMap<NodeId, Vec<NodeId>>,
-        msg_id: MessageId,
-    },
+    Topology(Topology),
 
     #[serde(rename = "topology_ok")]
-    TopologyOk {
-        msg_id: MessageId,
-        in_reply_to: MessageId,
-    },
+    TopologyOk(TopologyOk),
 }
