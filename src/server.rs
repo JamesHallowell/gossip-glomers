@@ -31,21 +31,21 @@ impl Server {
         let context = NodeContext::new(init.node_id);
         context.reply(message, InitOk {}).await?;
 
-        let mut futures = FuturesUnordered::new();
+        let mut node_futures = FuturesUnordered::new();
         loop {
             tokio::select! {
                 message = incoming_messages.next() => {
                     match message {
                         Some(message) => {
                             if let Ok(future) = router.handle(&context, &state, message) {
-                                futures.push(future);
+                                node_futures.push(future);
                             }
                         }
                         None => break,
                     };
 
                 },
-                result = futures.next(), if ! futures.is_empty() => {
+                result = node_futures.next(), if ! node_futures.is_empty() => {
                     match result {
                         Some(Ok(_)) => {},
                         Some(Err(error)) => {

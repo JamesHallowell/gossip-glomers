@@ -104,7 +104,7 @@ pub struct GenerateOk {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Broadcast {
-    pub message: i64,
+    pub message: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,7 +115,7 @@ pub struct Read {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadOk {
-    pub messages: Vec<i64>,
+    pub messages: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

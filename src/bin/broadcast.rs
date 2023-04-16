@@ -1,5 +1,4 @@
 use {
-    futures::future::{BoxFuture, FutureExt},
     gossip_glomers::{
         error::Error,
         node::{Node, NodeContext},
@@ -8,105 +7,52 @@ use {
         },
         server::Server,
     },
-    std::{cell::RefCell, collections::HashSet, rc::Rc, time::Duration},
+    serde_json::Value,
+    std::{
+        collections::HashSet,
+        sync::{Arc, Mutex},
+        time::Duration,
+    },
     tokio::time::sleep,
-    tower::{retry::Policy, ServiceBuilder, ServiceExt},
+    tower::ServiceExt,
 };
 
 #[derive(Default)]
 struct State {
     messages: HashSet<i64>,
-    neighbours: Vec<NodeId>,
 }
 
-type SharedState = Rc<RefCell<State>>;
-
-#[derive(Clone)]
-struct ExponentialBackoff {
-    attempts_remaining: usize,
-    delay: Duration,
-}
-
-impl ExponentialBackoff {
-    fn with_number_of_attempts(attempts: usize) -> Self {
-        Self {
-            attempts_remaining: attempts,
-            delay: Duration::from_secs(1),
-        }
-    }
-
-    fn with_starting_delay(mut self, delay: Duration) -> Self {
-        self.delay = delay;
-        self
-    }
-}
-
-impl<E> Policy<MessageBody, (), E> for ExponentialBackoff {
-    type Future = BoxFuture<'static, Self>;
-
-    fn retry(&self, _: &MessageBody, result: Result<&(), &E>) -> Option<Self::Future> {
-        match result {
-            Ok(_) => None,
-            Err(_) => (self.attempts_remaining > 0).then_some({
-                let Self {
-                    attempts_remaining,
-                    delay,
-                } = *self;
-
-                eprintln!(
-                    "timeout occurred, retrying in {}ms, {} attempts remain",
-                    delay.as_millis(),
-                    attempts_remaining
-                );
-
-                async move {
-                    sleep(delay).await;
-                    Self {
-                        attempts_remaining: attempts_remaining - 1,
-                        delay: delay * 2,
-                    }
-                }
-                .boxed()
-            }),
-        }
-    }
-
-    fn clone_request(&self, req: &MessageBody) -> Option<MessageBody> {
-        Some(req.clone())
-    }
-}
+type SharedState = Arc<Mutex<State>>;
 
 async fn broadcast(
-    context: NodeContext,
+    _: NodeContext,
     state: SharedState,
     Broadcast { message }: Broadcast,
 ) -> Result<BroadcastOk, Error> {
-    let is_new_message = { state.borrow_mut().messages.insert(message) };
+    let mut state = state.lock().unwrap();
 
-    if is_new_message {
-        let neighbouring_nodes = { state.borrow().neighbours.clone() };
-        for neighbour in neighbouring_nodes {
-            tokio::spawn({
-                let context = context.clone();
-
-                ServiceBuilder::new()
-                    .retry(
-                        ExponentialBackoff::with_number_of_attempts(10)
-                            .with_starting_delay(Duration::from_millis(50)),
-                    )
-                    .buffer(1)
-                    .timeout(Duration::from_secs(1))
-                    .service(context.send_to(neighbour))
-                    .oneshot(Broadcast { message }.into())
-            });
+    match message {
+        Value::Number(number) => {
+            if let Some(number) = number.as_i64() {
+                state.messages.insert(number);
+            }
         }
-    }
+        Value::Array(array) => {
+            for number in array {
+                if let Some(number) = number.as_i64() {
+                    state.messages.insert(number);
+                }
+            }
+        }
+        _ => {}
+    };
+
     Ok(BroadcastOk {})
 }
 
 async fn read(_: NodeContext, state: SharedState, _: Read) -> Result<ReadOk, Error> {
     Ok(ReadOk {
-        messages: state.borrow().messages.iter().copied().collect(),
+        messages: state.lock().unwrap().messages.iter().copied().collect(),
     })
 }
 
@@ -116,9 +62,68 @@ async fn topology(
     Topology { mut topology }: Topology,
 ) -> Result<TopologyOk, Error> {
     if let Some(neighbours) = topology.remove(&context.node_id()) {
-        state.borrow_mut().neighbours = neighbours;
+        for neighbour in neighbours {
+            tokio::spawn(gossip_with_neighbour(
+                neighbour,
+                Arc::clone(&state),
+                context.clone(),
+            ));
+        }
     }
     Ok(TopologyOk {})
+}
+
+async fn gossip_with_neighbour(neighbour: NodeId, state: SharedState, context: NodeContext) {
+    let mut messages_neighbour_knows = HashSet::<i64>::default();
+
+    loop {
+        const TIME_BETWEEN_GOSSIPING: Duration = Duration::from_millis(250);
+        sleep(TIME_BETWEEN_GOSSIPING).await;
+
+        let response = context
+            .send_to(neighbour.clone())
+            .oneshot(Read {}.into())
+            .await
+            .map(|message| message.body)
+            .map(serde_json::from_value);
+
+        if let Ok(Ok(MessageBody::ReadOk(ReadOk {
+            messages: Value::Array(messages),
+        }))) = response
+        {
+            for message in messages.iter().filter_map(|value| value.as_i64()) {
+                messages_neighbour_knows.insert(message);
+            }
+        }
+
+        let messages_to_tell_neighbour_about = {
+            state
+                .lock()
+                .unwrap()
+                .messages
+                .difference(&messages_neighbour_knows)
+                .copied()
+                .collect::<Vec<_>>()
+        };
+
+        if !messages_to_tell_neighbour_about.is_empty() {
+            let response = context
+                .send_to(neighbour.clone())
+                .oneshot(
+                    Broadcast {
+                        message: messages_to_tell_neighbour_about.clone().into(),
+                    }
+                    .into(),
+                )
+                .await
+                .map(|message| message.body)
+                .map(serde_json::from_value);
+
+            if let Ok(Ok(MessageBody::BroadcastOk(BroadcastOk {}))) = response {
+                messages_neighbour_knows.extend(messages_to_tell_neighbour_about);
+            }
+        }
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]

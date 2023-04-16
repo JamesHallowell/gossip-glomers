@@ -40,7 +40,7 @@ pub struct NodeContext(Arc<SharedContext>);
 struct SharedContext {
     node_id: NodeId,
     message_id_generator: MessageIdGenerator,
-    unacked_messages: Arc<Mutex<HashMap<MessageId, oneshot::Sender<Result<(), Error>>>>>,
+    unacked_messages: Arc<Mutex<HashMap<MessageId, oneshot::Sender<Result<Message, Error>>>>>,
 }
 
 impl NodeContext {
@@ -87,7 +87,7 @@ impl NodeContext {
         Ok(())
     }
 
-    fn register(&self, msg_id: MessageId) -> oneshot::Receiver<Result<(), Error>> {
+    fn register(&self, msg_id: MessageId) -> oneshot::Receiver<Result<Message, Error>> {
         let (sender, receiver) = oneshot::channel();
         self.0
             .unacked_messages
@@ -97,9 +97,9 @@ impl NodeContext {
         receiver
     }
 
-    fn acknowledge(&self, msg_id: MessageId) {
+    fn acknowledge(&self, msg_id: MessageId, message: Message) {
         if let Some(sender) = self.0.unacked_messages.lock().unwrap().remove(&msg_id) {
-            let _ = sender.send(Ok(()));
+            let _ = sender.send(Ok(message));
         }
     }
 
@@ -119,9 +119,9 @@ pub struct NodeService {
 }
 
 impl Service<MessageBody> for NodeService {
-    type Response = ();
+    type Response = Message;
     type Error = Error;
-    type Future = BoxFuture<'static, Result<(), Error>>;
+    type Future = BoxFuture<'static, Result<Message, Error>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -146,8 +146,8 @@ impl Service<MessageBody> for NodeService {
             body["msg_id"] = serde_json::to_value(msg_id)?;
 
             Message { src, dest, body }.send().await?;
-            let _ = receiver.await;
-            Ok(())
+            let response = receiver.await.map_err(|_err| Error::RequestCancelled)??;
+            Ok(response)
         }
         .boxed()
     }
@@ -156,7 +156,7 @@ impl Service<MessageBody> for NodeService {
 impl Drop for NodeService {
     fn drop(&mut self) {
         if let Some(msg_id) = self.msg_id.take() {
-            self.context.acknowledge(msg_id);
+            self.context.cancel(msg_id);
         }
     }
 }
@@ -229,7 +229,7 @@ impl<State> Router<State> {
         State: Clone + 'static,
     {
         if let Some(in_reply_to) = message.in_reply_to() {
-            context.acknowledge(in_reply_to);
+            context.acknowledge(in_reply_to, message.clone());
         }
 
         match message
